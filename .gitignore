@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.venv_app_data/
+/.poetry_cache/
+dist/
+build/
+*.egg-info/
+.DS_Store
+.idea/
+.vscode/
+*.log

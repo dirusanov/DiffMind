@@ -1,0 +1,58 @@
+[tool.poetry]
+name = "diffmind"
+version = "0.1.0"
+description = "AI-powered commit message generator (CLI + git hook) with delightful terminal UX"
+authors = ["DiffMind Contributors <random1k11@gmail.com>"]
+readme = "README.md"
+packages = [{ include = "diffmind" }]
+license = "MIT"
+keywords = [
+  "git", "commit", "cli", "hook", "openai", "ai", "productivity"
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Version Control :: Git"
+]
+
+[tool.poetry.dependencies]
+python = ">=3.8,<4.0"
+rich = "^13.7.1"
+typer = {version = "^0.12.3", extras = ["all"]}
+gitpython = "^3.1.43"
+pydantic = "^2.8.2"
+typing-extensions = "^4.12.2"
+tomli = {version = "^2.0.1", python = "<3.11"}
+openai = {version = ">=1.0.0", optional = true}
+InquirerPy = "^0.3.4"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.6.2"
+black = "^24.8.0"
+
+[tool.poetry.extras]
+ai = ["openai"]
+
+[tool.poetry.scripts]
+diffmind = "diffmind.cli:app"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
