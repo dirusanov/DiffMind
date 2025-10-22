@@ -1,0 +1,21 @@
+{
+  "session_id": "20251022-191049",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Какой первый коммиит? "
+    },
+    {
+      "role": "assistant",
+      "content": "Первый коммит: 5bea35f, Сообщение: Initial commit, Автор: dirusanov, Дата: 2025-10-22 11:41:31 +03:00"
+    },
+    {
+      "role": "user",
+      "content": "Какой последний коммит? "
+    },
+    {
+      "role": "assistant",
+      "content": "hash_short: 859fe36\nhash: 859fe36c9b408fd08cb7890bcce90ddaf958d1fa\nsubject: Update README\nauthor: dirusanov\ndate: 2025-10-22T11:51:18+03:00"
+    }
+  ]
+}

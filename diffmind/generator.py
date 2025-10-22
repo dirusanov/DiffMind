@@ -24,11 +24,11 @@ def generate_commit_message(repo: Repo, cfg: Optional[DiffMindConfig] = None) ->
     cfg = cfg or DiffMindConfig.load()
     provider = _select_provider(cfg)
     changes = get_staged_changes(repo)
-    diff_text = get_staged_diff_text(repo, unified=0)
+    # Use small context to improve heuristics without overwhelming providers
+    diff_text = get_staged_diff_text(repo, unified=3)
     msg = provider.generate(diff_text=diff_text, changes=changes)
 
     # Post-process subject length
     if cfg.max_subject_length and len(msg.subject) > cfg.max_subject_length:
         msg.subject = msg.subject[: cfg.max_subject_length - 1].rstrip() + "…"
     return msg
-

@@ -29,9 +29,11 @@ class DiffMindConfig:
     scope_strategy: str = "topdir"  # topdir | none
     language: str = "auto"  # auto | en | ru
 
-    openai_model: str = "gpt-4o-mini"
+    openai_model: str = "gpt-5-nano"
     openai_base_url: Optional[str] = None
     openai_api_key: Optional[str] = None
+    # Optional reasoning effort hint (for future use): none|low|medium|high
+    openai_reasoning_effort: Optional[str] = None
     auto_install_openai: bool = False
 
     @classmethod

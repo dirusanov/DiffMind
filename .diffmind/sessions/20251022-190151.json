@@ -1,0 +1,21 @@
+{
+  "session_id": "20251022-190151",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Какой последний коммит? "
+    },
+    {
+      "role": "assistant",
+      "content": "{\"action\": \"git_commit\", \"input\": \"\"}"
+    },
+    {
+      "role": "user",
+      "content": "Что это? "
+    },
+    {
+      "role": "assistant",
+      "content": "Это команда для получения информации о последнем коммите в репозитории Git."
+    }
+  ]
+}

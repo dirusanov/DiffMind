@@ -38,11 +38,23 @@ class OpenAIProvider(CommitMessageProvider):
             "Return as two lines: first the subject, then the body.\n\n" + diff_text
         )
 
-        resp = self._client.chat.completions.create(
-            model=self.cfg.openai_model,
-            messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
-            temperature=0.3,
-        )
+        # Try with temperature for models that support it, else fallback
+        try:
+            resp = self._client.chat.completions.create(
+                model=self.cfg.openai_model,
+                messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+                temperature=0.3,
+            )
+        except Exception as e:
+            msg = str(e).lower()
+            if "temperature" in msg and ("unsupported" in msg or "does not support" in msg):
+                resp = self._client.chat.completions.create(
+                    model=self.cfg.openai_model,
+                    messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+                )
+            else:
+                raise
+
         content = resp.choices[0].message.content.strip()
         lines = content.splitlines()
         subject = lines[0].strip()

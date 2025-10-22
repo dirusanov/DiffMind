@@ -1,0 +1,33 @@
+{
+  "session_id": "20251022-185924",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Какой последний комиит? "
+    },
+    {
+      "role": "user",
+      "content": "что за ошибка? "
+    },
+    {
+      "role": "assistant",
+      "content": "{\"action\": \"git_commit\", \"hash\": \"short\"}"
+    },
+    {
+      "role": "user",
+      "content": "какой последний комиит? "
+    },
+    {
+      "role": "assistant",
+      "content": "{\"action\": \"git_commit\", \"hash\": \"short\"}"
+    },
+    {
+      "role": "user",
+      "content": " хэш послднего коммита? "
+    },
+    {
+      "role": "assistant",
+      "content": "{\"action\": \"git_commit\", \"hash\": \"full\"}"
+    }
+  ]
+}
