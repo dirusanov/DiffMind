@@ -1297,6 +1297,14 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
     llm, tools, _misconfigured = _build_llm_and_tools(cfg)
     inline_agent = AgentOrchestrator(llm, tools, max_steps=4)
 
+    def _exit_interactive_session() -> None:
+        if inline_session.messages:
+            try:
+                inline_session.save()
+            except Exception:
+                pass
+        console.print("Leaving interactive session without committing.", style="dim")
+
     # Render initial suggestion once (banner + status)
     banner("[b]Commit Message Suggestion[/b]")
     status_panel(cfg)
@@ -1334,6 +1342,9 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
             action = _stable_select("Choose an action", choices, default="commit")
             if action is None:
                 continue
+            if action == "quit":
+                # Close menu and return to prompt without executing anything
+                continue
             # Map selection to actions below by setting a synthetic instruction
             instr = {
                 "commit": "commit",
@@ -1351,6 +1362,11 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
 
         if instr and instr.strip():
             t = instr.strip()
+            lowered = t.lower()
+            normalized = lowered[1:] if lowered.startswith("/") else lowered
+            if normalized in {"quit", "exit", "leave"}:
+                _exit_interactive_session()
+                return
             # Slash commands
             if t in {"/help", "/?", "/"}:
                 # Minimal command palette
@@ -1511,7 +1527,7 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
             # User canceled or menu failed; just return to input
             continue
         if action == "quit":
-            # Close menu, stay in interactive session
+            # Close menu and return to prompt without executing anything
             continue
         if action == "diff":
             diff = get_staged_diff_text(repo, unified=3) or "(no staged diff)"
