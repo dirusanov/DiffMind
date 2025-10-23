@@ -1305,6 +1305,80 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
                 pass
         console.print("Leaving interactive session without committing.", style="dim")
 
+    def _handle_action(action: str, *, ask_options: bool = False) -> Optional[bool]:
+        """Handle core actions. Returns True to continue loop, False to exit, None if unhandled."""
+
+        nonlocal msg, cfg
+        act = (action or "").strip().lower()
+        if not act:
+            return None
+        if act == "commit":
+            if ask_options:
+                _do_commit(msg, ask_options=True)
+            else:
+                with console.status("Committing…", spinner="dots"):
+                    _do_commit(msg)
+            return False
+        if act == "regen":
+            src = (cfg.provider or "simple")
+            with console.status(f"Regenerating suggestion ({src})…", spinner="dots"):
+                msg = generate_commit_message(repo, cfg, force_regen=True)
+            print_message(msg.subject, msg.body)
+            return True
+        if act == "diff":
+            diff = get_staged_diff_text(repo, unified=3) or "(no staged diff)"
+            console.print(Panel(diff, title="Staged Diff", border_style="magenta", box=box.ROUNDED))
+            return True
+        if act == "edit":
+            subj = inquirer.text(message="Subject", default=msg.subject).execute()
+            body = inquirer.text(message="Body (empty — keep as is)", default=msg.body or "").execute()
+            msg.subject, msg.body = subj, (body or None)
+            try:
+                _cache_save_current(repo, msg, {"source": "edit"})
+            except Exception:
+                pass
+            print_message(msg.subject, msg.body)
+            return True
+        if act == "editor":
+            content = msg.subject + ("\n\n" + msg.body if msg.body else "")
+            new = _edit_in_editor(content)
+            parts = new.splitlines()
+            new_subject = (parts[0].strip() if parts else msg.subject) or msg.subject
+            new_body = "\n".join(parts[1:]).strip() or None
+            msg.subject, msg.body = new_subject, new_body
+            try:
+                _cache_save_current(repo, msg, {"source": "editor"})
+            except Exception:
+                pass
+            print_message(msg.subject, msg.body)
+            return True
+        if act == "add":
+            line = inquirer.text(message="Bullet line", default="").execute()
+            if line.strip():
+                if msg.body:
+                    msg.body = (msg.body + "\n- " + line.strip()).rstrip()
+                else:
+                    msg.body = "- " + line.strip()
+            try:
+                _cache_save_current(repo, msg, {"source": "add"})
+            except Exception:
+                pass
+            print_message(msg.subject, msg.body)
+            return True
+        if act == "wizard":
+            config_wizard()
+            cfg = DiffMindConfig.load()
+            status_panel(cfg)
+            return True
+        if act == "chat":
+            _chat_loop(repo, cfg)
+            return True
+        if act == "model":
+            _choose_openai_model(cfg, repo)
+            status_panel(cfg)
+            return True
+        return None
+
     # Render initial suggestion once (banner + status)
     banner("[b]Commit Message Suggestion[/b]")
     status_panel(cfg)
@@ -1329,34 +1403,16 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
         # If user pressed Enter on empty input in the prompt, open the action menu
         if res == SENT_MENU:
             choices = [
-                {"name": "✅ Commit", "value": "commit"},
                 {"name": "🔁 Regenerate", "value": "regen"},
                 {"name": "✏️  Edit subject/body", "value": "edit"},
                 {"name": "📝 Open in $EDITOR", "value": "editor"},
-                {"name": "➕ Add bullet to body", "value": "add"},
-                {"name": "🤖 Agent chat", "value": "chat"},
                 {"name": "📄 Show staged diff", "value": "diff"},
-                {"name": "⚙️  Config wizard", "value": "wizard"},
-                {"name": "🚪 Quit", "value": "quit"},
             ]
-            action = _stable_select("Choose an action", choices, default="commit")
+            action = _stable_select("Choose an action", choices, default="regen")
             if action is None:
                 continue
-            if action == "quit":
-                # Close menu and return to prompt without executing anything
-                continue
             # Map selection to actions below by setting a synthetic instruction
-            instr = {
-                "commit": "commit",
-                "regen": "regen",
-                "edit": "edit",
-                "editor": "editor",
-                "add": "add",
-                "chat": "chat",
-                "diff": "diff",
-                "wizard": "wizard",
-                "quit": "quit",
-            }.get(action, "")
+            instr = action or ""
         else:
             instr = res if res is not None else inquirer.text(message="\u258c ").execute()
 
@@ -1366,6 +1422,11 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
             normalized = lowered[1:] if lowered.startswith("/") else lowered
             if normalized in {"quit", "exit", "leave"}:
                 _exit_interactive_session()
+                return
+            handled_direct = _handle_action(normalized)
+            if handled_direct is True:
+                continue
+            if handled_direct is False:
                 return
             # Slash commands
             if t in {"/help", "/?", "/"}:
@@ -1452,6 +1513,12 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
                 continue
             # Natural command shortcuts
             action = _interpret_instruction(instr)
+            if action:
+                handled = _handle_action(action)
+                if handled is True:
+                    continue
+                if handled is False:
+                    return
             # Natural-language config changes
             if not action and _apply_config_from_text(instr, cfg, repo):
                 status_panel(cfg)
@@ -1462,22 +1529,6 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
                         pass
                 # Show updated message only
                 print_message(msg.subject, msg.body)
-                continue
-            if action == "commit":
-                with console.status("Committing…", spinner="dots"):
-                    _do_commit(msg)
-                return
-            if action == "regen":
-                with console.status(
-                    f"Regenerating suggestion ({cfg.provider or 'simple'})…", spinner="dots"
-                ):
-                    msg = generate_commit_message(repo, cfg, force_regen=True)
-                # Show updated message (avoid re-printing banner/status)
-                print_message(msg.subject, msg.body)
-                continue
-            if action == "diff":
-                diff = get_staged_diff_text(repo, unified=3) or "(no staged diff)"
-                console.print(Panel(diff, title="Staged Diff", border_style="magenta", box=box.ROUNDED))
                 continue
             # Git Q&A: detect git-related questions and answer with OpenAI when available
             is_question = _looks_like_question(instr)
@@ -1512,78 +1563,20 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
             continue
 
         choices = [
-            {"name": "✅ Commit", "value": "commit"},
             {"name": "🔁 Regenerate", "value": "regen"},
             {"name": "✏️  Edit subject/body", "value": "edit"},
             {"name": "📝 Open in $EDITOR", "value": "editor"},
-            {"name": "➕ Add bullet to body", "value": "add"},
-            {"name": "🤖 Agent chat", "value": "chat"},
             {"name": "📄 Show staged diff", "value": "diff"},
-            {"name": "⚙️  Config wizard", "value": "wizard"},
-            {"name": "🚪 Quit", "value": "quit"},
         ]
-        action = _stable_select("Choose an action", choices, default="commit")
+        action = _stable_select("Choose an action", choices, default="regen")
         if action is None:
             # User canceled or menu failed; just return to input
             continue
-        if action == "quit":
-            # Close menu and return to prompt without executing anything
+        handled = _handle_action(action, ask_options=(action == "commit"))
+        if handled is False:
+            return
+        if handled is True or handled is None:
             continue
-        if action == "diff":
-            diff = get_staged_diff_text(repo, unified=3) or "(no staged diff)"
-            console.print(Panel(diff, title="Staged Diff", border_style="magenta", box=box.ROUNDED))
-            continue
-        if action == "regen":
-            msg = generate_commit_message(repo, cfg, force_regen=True)
-            continue
-        if action == "edit":
-            subj = inquirer.text(message="Subject", default=msg.subject).execute()
-            body = inquirer.text(message="Body (empty — keep as is)", default=msg.body or "").execute()
-            msg.subject, msg.body = subj, (body or None)
-            try:
-                _cache_save_current(repo, msg, {"source": "edit"})
-            except Exception:
-                pass
-            print_message(msg.subject, msg.body)
-            continue
-        if action == "editor":
-            content = msg.subject + ("\n\n" + msg.body if msg.body else "")
-            new = _edit_in_editor(content)
-            parts = new.splitlines()
-            new_subject = (parts[0].strip() if parts else msg.subject) or msg.subject
-            new_body = "\n".join(parts[1:]).strip() or None
-            msg.subject, msg.body = new_subject, new_body
-            try:
-                _cache_save_current(repo, msg, {"source": "editor"})
-            except Exception:
-                pass
-            print_message(msg.subject, msg.body)
-            continue
-        if action == "add":
-            line = inquirer.text(message="Bullet line", default="").execute()
-            if line.strip():
-                if msg.body:
-                    msg.body = (msg.body + "\n- " + line.strip()).rstrip()
-                else:
-                    msg.body = "- " + line.strip()
-            try:
-                _cache_save_current(repo, msg, {"source": "add"})
-            except Exception:
-                pass
-            print_message(msg.subject, msg.body)
-            continue
-        if action == "wizard":
-            config_wizard()
-            cfg = DiffMindConfig.load()  # reload
-            continue
-        if action == "model":
-            _choose_openai_model(cfg, repo)
-            status_panel(cfg)
-            continue
-        if action == "commit":
-            _do_commit(msg, ask_options=True)
-        if action == "chat":
-            _chat_loop(repo, cfg)
 
 
 @config_app.command("show")
