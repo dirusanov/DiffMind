@@ -14,13 +14,20 @@ console = Console()
 
 
 def banner(title: str) -> None:
-    console.print(Panel.fit(Text.from_markup(title), border_style="magenta", title="DiffMind", box=box.ROUNDED))
+    # Print a simple title line without box borders
+    t = Text.from_markup(title)
+    t.stylize("magenta")
+    console.print(t)
 
 
 def print_message(subject: str, body: Optional[str]) -> None:
+    # Avoid rendering an empty panel when nothing to show
+    if not (subject or body):
+        return
     table = Table.grid(padding=(0, 2))
     table.add_column(justify="left")
-    table.add_row(Text(subject, style="bold green"))
+    if subject:
+        table.add_row(Text(subject, style="bold green"))
     if body:
         table.add_row(Text(body, style="dim"))
     console.print(Panel.fit(table, border_style="green", box=box.ROUNDED))

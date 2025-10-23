@@ -28,10 +28,12 @@ class OpenAIProvider(CommitMessageProvider):
         self._client = openai.OpenAI(api_key=api_key, base_url=cfg.openai_base_url)
 
     def generate(self, diff_text: str, changes: Sequence[FileChange]) -> Message:
-        # Keep prompt compact; ask for subject + body with emojis and conventional type
+        # Keep prompt compact; ask for subject + body with optional emojis and conventional type
+        with_emojis = bool(self.cfg.emojis)
         sys = (
-            "You generate excellent, concise Git commit messages with emojis and "
-            "Conventional Commit types. Subject max 72 chars. Body as bullet list with file stats."
+            "You generate excellent, concise Git commit messages "
+            + ("with emojis " if with_emojis else "without emojis ")
+            + "and Conventional Commit types. Subject max 72 chars. Body as bullet list with file stats."
         )
         user = (
             "Create a commit message from this staged git diff. "

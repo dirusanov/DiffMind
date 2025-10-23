@@ -9,7 +9,7 @@ from typing import Optional
 from git import Repo
 
 from .config import DiffMindConfig
-from .generator import generate_commit_message
+from .generator import generate_commit_message, NoChangesError
 from .utils.git import has_non_comment_content, write_commit_message
 
 
@@ -57,7 +57,9 @@ def run_prepare_commit_msg(repo: Repo, message_file: str, commit_source: Optiona
         return 0
 
     cfg = DiffMindConfig.load()
-    msg = generate_commit_message(repo, cfg)
+    try:
+        msg = generate_commit_message(repo, cfg)
+    except NoChangesError:
+        return 0
     write_commit_message(path, msg.subject, msg.body)
     return 0
-

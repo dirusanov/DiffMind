@@ -25,7 +25,8 @@ def refine_with_openai(subject: str, body: Optional[str], diff_text: str, feedba
     client = openai.OpenAI(api_key=api_key, base_url=cfg.openai_base_url)
     sys = (
         "You are a helpful assistant that rewrites Git commit messages based on user feedback. "
-        "Keep subject under 72 chars; use emojis and Conventional Commit type if applicable."
+        + ("Use emojis; " if cfg.emojis else "Avoid emojis; ")
+        + "keep subject under 72 chars; use Conventional Commit type when applicable."
     )
     user = (
         "Rewrite this commit message according to FEEDBACK. Return two lines: subject then body.\n\n"
