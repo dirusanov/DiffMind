@@ -8,9 +8,10 @@ from .base import ChatMessage, LLMClient, Tool, ToolContext
 
 
 SYSTEM_PROMPT = (
-    "You are a senior Git assistant. You can think step-by-step, use tools, and produce precise commands. "
+    "You are a senior Git assistant. Think step-by-step, use tools, and provide precise information when needed. "
     "When the question is Russian, answer in Russian; otherwise match the user's language. "
-    "Keep answers concise with numbered steps and exact commands."
+    "Deliver final answers as polished, user-friendly explanations. Suggest shell commands only when the user asks "
+    "or when they are clearly required to act on your answer."
 )
 
 
@@ -23,7 +24,8 @@ INSTRUCTIONS = (
     '{"action": "final", "output": "<your final helpful answer>"}\n'
     "After a tool call, you will receive an Observation with the tool's result. Use it to decide next step.\n"
     "If the Observation already contains the necessary answer, respond with a final action.\n"
-    "Do at most 4 steps unless necessary. Prefer a single tool call when enough."
+    "Do at most 4 steps unless necessary. Prefer a single tool call when enough.\n"
+    "Keep the final answer concise, readable, and free from internal instructions or diagnostic details."
 )
 
 
@@ -41,11 +43,6 @@ class AgentOrchestrator:
         self.max_steps = max_steps
 
     def run_git_assistant(self, question: str, ctx: ToolContext, history: Optional[List[ChatMessage]] = None) -> str:
-        # Heuristic fast-path for common git queries
-        quick = _quick_answer_with_tools(question, ctx, self.tools)
-        if quick:
-            return quick
-
         msgs: List[ChatMessage] = [
             ChatMessage(
                 role="system",
@@ -158,41 +155,4 @@ def _extract_action_json(text: str) -> Optional[dict]:
                 return obj
         except Exception:
             pass
-    return None
-
-
-def _quick_answer_with_tools(question: str, ctx: ToolContext, tools: dict[str, Tool]) -> Optional[str]:
-    q = (question or "").strip().lower()
-    # Count commits
-    if ("сколько" in q and "коммит" in q) or ("how many" in q and "commit" in q) or ("count" in q and "commit" in q):
-        t = tools.get("git_repo")
-        if t:
-            try:
-                return t.run(ctx, "count")
-            except Exception:
-                pass
-    # First commit
-    if ("перв" in q and "коммит" in q) or ("first" in q and "commit" in q):
-        t = tools.get("git_repo")
-        if t:
-            try:
-                return t.run(ctx, "first")
-            except Exception:
-                pass
-    # Last commit (subject/author/date)
-    if ("послед" in q and "коммит" in q) or ("last" in q and "commit" in q):
-        t = tools.get("git_commit")
-        if t:
-            try:
-                return t.run(ctx, "")
-            except Exception:
-                pass
-    # Last commit hash
-    if ("хеш" in q or "hash" in q) and ("коммит" in q or "commit" in q) and ("first" not in q and "перв" not in q):
-        t = tools.get("git_commit")
-        if t:
-            try:
-                return t.run(ctx, "hash short")
-            except Exception:
-                pass
     return None
