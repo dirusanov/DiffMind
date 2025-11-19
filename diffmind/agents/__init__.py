@@ -5,6 +5,7 @@ from .tools.git_tools import GitDiffTool
 from .tools.git_commit import GitCommitTool
 from .tools.git_repo import GitRepoTool
 from .tools.calc import CalculatorTool
+from .tools.git_run import GitRunTool
 
 __all__ = [
     "ChatMessage",
@@ -18,4 +19,5 @@ __all__ = [
     "CalculatorTool",
     "GitCommitTool",
     "GitRepoTool",
+    "GitRunTool",
 ]

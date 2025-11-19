@@ -260,7 +260,7 @@ diffmind hook uninstall
 
 ## Contributing
 
-Contributions are welcome! If you plan to add a provider or improve heuristics, please keep the UX consistent and simple. Open an issue to discuss ideas.
+Contributions are welcome! If you plan to add a provider or improve agent flows/prompts, please keep the UX consistent and simple. Open an issue to discuss ideas.
 
 ## License
 

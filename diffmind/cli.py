@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 import subprocess
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
+from contextlib import contextmanager
+from threading import Event, Thread
 
 import typer
 from git import Repo
@@ -19,14 +24,63 @@ from .generator import generate_commit_message, NoChangesError
 from .cache import save_for_current_diff as _cache_save_current
 from .hooks import HOOK_NAME, install_hook, run_prepare_commit_msg, uninstall_hook
 from .ui import banner, print_message, tip, openai_help_panel, status_panel, simple_mode_warning
-from .agents import AgentOrchestrator, OpenAIChat, NoopLLM, GitDiffTool, CalculatorTool, GitCommitTool, GitRepoTool
+from .agents import (
+    AgentOrchestrator,
+    OpenAIChat,
+    NoopLLM,
+    GitDiffTool,
+    CalculatorTool,
+    GitCommitTool,
+    GitRepoTool,
+    LLMClient,
+    GitRunTool,
+)
 from .agents.base import ToolContext, ChatMessage
 from .agents.session import ChatSession
 from .providers.base import ProviderConfigError, Message
-from .refiner import refine_with_openai, heuristic_refine, answer_git_question
+from .refiner import refine_with_openai
 
 
 console = Console()
+
+
+@contextmanager
+def timed_status(message: str, *, spinner: str = "dots"):
+    """Show Rich status with elapsed time in seconds.
+
+    Supports dynamic text updates via attribute '._dm_set_message(new_text)'.
+    """
+    start = time.monotonic()
+    stop = Event()
+    msg_ref = {"text": message}
+    with console.status(f"{msg_ref['text']} (0.0s)", spinner=spinner) as status:
+
+        def _tick() -> None:
+            while not stop.wait(0.1):
+                elapsed = time.monotonic() - start
+                status.update(f"{msg_ref['text']} ({elapsed:.1f}s)")
+
+        def _set_message(new_text: str) -> None:
+            try:
+                msg_ref["text"] = str(new_text)
+            except Exception:
+                pass
+
+        # Expose setter for callers that want to rename the status on the fly
+        try:
+            setattr(status, "_dm_set_message", _set_message)
+        except Exception:
+            pass
+
+        worker = Thread(target=_tick, name="timed-status", daemon=True)
+        worker.start()
+        try:
+            yield status
+        finally:
+            stop.set()
+            worker.join(timeout=0.3)
+            elapsed = time.monotonic() - start
+            status.update(f"{msg_ref['text']} ({elapsed:.1f}s)")
 # Disable Typer rich help formatting to avoid Click 8.1+ API mismatch
 app = typer.Typer(
     add_completion=False,
@@ -397,7 +451,7 @@ def _default(ctx: typer.Context):
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=1)
     cfg = DiffMindConfig.load()
-    with console.status("Preparing suggestion…", spinner="dots"):
+    with timed_status("Preparing suggestion…", spinner="dots"):
         try:
             msg = generate_commit_message(repo, cfg)
         except ProviderConfigError as e:
@@ -1214,57 +1268,163 @@ def _prompt_with_slash(
         return None
 
 
-def _interpret_instruction(text: str) -> Optional[str]:
-    t = text.strip().lower()
-    commit_words = {
-        "commit",
-        "commit this",
-        "ok",
-        "looks good",
-        "lgtm",
-        "ship it",
-        "закоммить",
-        "коммит",
-        "коммитим",
-        "давай коммит",
-        "всё ок",
-        "все ок",
-        "готово",
-        "сделай коммит",
-        "закомить",
-        "закоммить это",
-        "commit it",
-    }
-    regen_words = {"regen", "regenerate", "again", "ещё", "еще", "перегенерируй", "перегенери", "снова", "другой", "ещё раз"}
-    diff_words = {"diff", "show diff", "покажи дифф", "дифф", "show changes", "покажи изменения"}
-    if t in commit_words:
-        return "commit"
-    if t in regen_words:
-        return "regen"
-    if t in diff_words:
-        return "diff"
+_INTERACTIVE_ACTIONS: list[tuple[str, str]] = [
+    ("commit", "Create the Git commit with the current suggestion. Only when explicitly requested."),
+    ("regen", "Regenerate the suggested commit message."),
+    ("diff", "Show the staged git diff to the user."),
+    ("edit", "Inline edit of subject and body within the terminal."),
+    ("editor", "Open the full message in the external editor."),
+    ("add", "Append an extra bullet line to the commit body."),
+    ("wizard", "Start the DiffMind configuration wizard."),
+    ("chat", "Open the conversational Git assistant."),
+]
+
+_INTERACTIVE_ACTION_SET = {name for name, _ in _INTERACTIVE_ACTIONS}
+_ACTION_LIST_TEXT = "\n".join(f"- {name}: {desc}" for name, desc in _INTERACTIVE_ACTIONS) + "\n- none: Do nothing; return this when uncertain or when the user is just asking a question."
+
+_INSTRUCTION_CLASSIFIER_SYSTEM_PROMPT = (
+    "You classify user instructions for the DiffMind interactive commit assistant. "
+    "Pick an action only when the user explicitly requests it. If the user is unsure, asks a question, "
+    "or the request falls outside of the supported actions, respond with action 'none'.\n\n"
+    "Supported actions:\n"
+    f"{_ACTION_LIST_TEXT}\n\n"
+    "Always reply with JSON of the form {\"action\": \"<name>\", \"confidence\": <0-1>, \"reason\": \"...\"}. "
+    "Acceptable action values: " + ", ".join(sorted(_INTERACTIVE_ACTION_SET | {"none"})) + "."
+)
+
+
+def _interpret_instruction(text: str, llm: LLMClient | None = None) -> Optional[str]:
+    """Map a user's free-form instruction to an interactive action using the LLM only.
+
+    Returns None when the classifier isn't available or the model is uncertain.
+    """
+
+    t = (text or "").strip()
+    if not t:
+        return None
+
+    action, reliable = _interpret_instruction_via_llm(t, llm)
+    if reliable:
+        return action
     return None
 
 
-def _looks_like_question(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if "?" in t:
-        return True
-    prefixes = (
-        # Russian interrogatives
-        "как ", "что ", "что такое ", "что это ", "что делает ",
-        "почему ", "зачем ", "когда ", "где ", "сколько ", "кто ",
-        "какой ", "какая ", "какие ",
-        "о чем ", "о чём ", "в чем ", "в чём ",
-        # Russian imperative info-requests
-        "расскажи", "объясни", "подскажи", "покажи", "научи", "перечисли", "опиши",
-        # English interrogatives/modal questions
-        "how ", "what ", "why ", "when ", "where ", "which ", "who ",
-        "can ", "could ", "should ", "would ", "will ", "is ", "are ", "am ", "do ", "does ", "did ",
-        # English imperative info-requests
-        "tell me", "show me", "explain", "list ", "describe ", "help me", "please ",
-    )
-    return t.startswith(prefixes)
+def _interpret_instruction_via_llm(text: str, llm: LLMClient | None) -> Tuple[Optional[str], bool]:
+    """Attempt to classify instruction via the configured LLM.
+
+    Returns (action, reliable). When reliable is True, the caller MUST trust the result
+    even if the action is None (meaning the model explicitly chose 'none').
+    """
+
+    if llm is None:
+        return None, False
+    try:
+        response = llm.complete_chat(
+            [
+                ChatMessage(role="system", content=_INSTRUCTION_CLASSIFIER_SYSTEM_PROMPT),
+                ChatMessage(role="user", content=f"Instruction: {text.strip()}"),
+            ],
+            temperature=0.0,
+        )
+    except Exception:
+        return None, False
+    action = _parse_instruction_classifier_output(response)
+    if action is None:
+        return None, False
+    if action == "none":
+        return None, True
+    if action in _INTERACTIVE_ACTION_SET:
+        return action, True
+    return None, False
+
+
+def _parse_instruction_classifier_output(text: str) -> Optional[str]:
+    """Extract the action label from the classifier response."""
+
+    s = (text or "").strip()
+    if not s:
+        return None
+
+    candidates: list[str] = []
+    if s.startswith("{") and s.endswith("}"):
+        candidates.append(s)
+    for ln in s.splitlines():
+        line = ln.strip()
+        if line.startswith("{") and line.endswith("}"):
+            candidates.append(line)
+    fence = re.compile(r"```(json)?\s*([\s\S]*?)```", re.IGNORECASE)
+    for match in fence.finditer(s):
+        block = match.group(2).strip()
+        if block:
+            candidates.append(block)
+
+    for snippet in candidates:
+        try:
+            payload = json.loads(snippet)
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            action_val = payload.get("action") or payload.get("intent") or payload.get("decision")
+            if isinstance(action_val, str):
+                normalized = action_val.strip().lower()
+                if normalized in _INTERACTIVE_ACTION_SET or normalized == "none":
+                    return normalized
+
+    lowered = s.lower()
+    if lowered in _INTERACTIVE_ACTION_SET or lowered == "none":
+        return lowered
+    return None
+
+def _is_question_via_llm(text: str, llm: LLMClient | None) -> bool:
+    """Classify whether the input is a question using the configured LLM.
+
+    Returns False if no LLM is configured or the model is uncertain.
+    """
+    if llm is None:
+        return False
+    t = (text or "").strip()
+    if not t:
+        return False
+    try:
+        resp = llm.complete_chat(
+            [
+                ChatMessage(
+                    role="system",
+                    content=(
+                        "You are a precise classifier. Return JSON only: {\"is_question\": true|false}.\n"
+                        "Consider the input as a question if the user is seeking information or guidance, not issuing an action or feedback."
+                    ),
+                ),
+                ChatMessage(role="user", content=f"Input: {t}"),
+            ],
+            temperature=0.0,
+        )
+    except Exception:
+        return False
+    s = (resp or "").strip()
+    # Try to parse structured JSON if present
+    import json as _json
+    import re as _re
+    blocks: list[str] = []
+    if s.startswith("{") and s.endswith("}"):
+        blocks.append(s)
+    for ln in s.splitlines():
+        ln = ln.strip()
+        if ln.startswith("{") and ln.endswith("}"):
+            blocks.append(ln)
+    for m in _re.finditer(r"```(json)?\s*([\s\S]*?)```", s, flags=_re.IGNORECASE):
+        blk = (m.group(2) or "").strip()
+        if blk:
+            blocks.append(blk)
+    for b in blocks:
+        try:
+            obj = _json.loads(b)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("is_question"), bool):
+            return bool(obj["is_question"])
+    # As a conservative fallback, treat as not a question
+    return False
 
 
 def _do_commit(msg, ask_options: bool = False):
@@ -1308,7 +1468,7 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
     def _handle_action(action: str, *, ask_options: bool = False) -> Optional[bool]:
         """Handle core actions. Returns True to continue loop, False to exit, None if unhandled."""
 
-        nonlocal msg, cfg
+        nonlocal msg, cfg, llm, tools, inline_agent
         act = (action or "").strip().lower()
         if not act:
             return None
@@ -1316,12 +1476,12 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
             if ask_options:
                 _do_commit(msg, ask_options=True)
             else:
-                with console.status("Committing…", spinner="dots"):
+                with timed_status("Committing…", spinner="dots"):
                     _do_commit(msg)
             return False
         if act == "regen":
             src = (cfg.provider or "simple")
-            with console.status(f"Regenerating suggestion ({src})…", spinner="dots"):
+            with timed_status(f"Regenerating suggestion ({src})…", spinner="dots"):
                 msg = generate_commit_message(repo, cfg, force_regen=True)
             print_message(msg.subject, msg.body)
             return True
@@ -1368,6 +1528,8 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
         if act == "wizard":
             config_wizard()
             cfg = DiffMindConfig.load()
+            llm, tools, _ = _build_llm_and_tools(cfg)
+            inline_agent = AgentOrchestrator(llm, tools, max_steps=4)
             status_panel(cfg)
             return True
         if act == "chat":
@@ -1375,6 +1537,8 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
             return True
         if act == "model":
             _choose_openai_model(cfg, repo)
+            llm, tools, _ = _build_llm_and_tools(cfg)
+            inline_agent = AgentOrchestrator(llm, tools, max_steps=4)
             status_panel(cfg)
             return True
         return None
@@ -1387,6 +1551,8 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
     print_message(msg.subject, msg.body)
 
     while True:
+
+        _flush_stdin()
 
         # Prompt with live slash palette when available (minimal palette)
         res = _prompt_with_slash(
@@ -1491,14 +1657,20 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
                 parts = t.split(maxsplit=1)
                 if len(parts) > 1 and _apply_models_token(parts[1], cfg, repo):
                     # Reprint status to reflect model change
+                    llm, tools, _ = _build_llm_and_tools(cfg)
+                    inline_agent = AgentOrchestrator(llm, tools, max_steps=4)
                     status_panel(cfg)
                     continue
                 _choose_openai_model(cfg, repo)
                 # Reprint status to reflect model change
+                llm, tools, _ = _build_llm_and_tools(cfg)
+                inline_agent = AgentOrchestrator(llm, tools, max_steps=4)
                 status_panel(cfg)
                 continue
             if t == "/mode" or t.startswith("/mode"):
                 _choose_provider_mode(cfg, repo)
+                llm, tools, _ = _build_llm_and_tools(cfg)
+                inline_agent = AgentOrchestrator(llm, tools, max_steps=4)
                 status_panel(cfg)
                 continue
             if t == "/emojis" or t.startswith("/emojis"):
@@ -1511,54 +1683,72 @@ def _interactive_suggest(repo: Repo, cfg: DiffMindConfig, msg):
                     _choose_emojis(cfg, repo)
                 status_panel(cfg)
                 continue
-            # Natural command shortcuts
-            action = _interpret_instruction(instr)
-            if action:
-                handled = _handle_action(action)
+            # Interpret instruction and/or answer questions – show status immediately
+            post_action: Optional[str] = None
+            applied_config = False
+            answered = False
+            ans: str | None = None
+            with timed_status("Answering your question…", spinner="dots") as st:
+                # 1) Try mapping to an interactive action via LLM
+                post_action = _interpret_instruction(instr, llm)
+                # 2) Try natural-language config changes when no action
+                if not post_action and _apply_config_from_text(instr, cfg, repo):
+                    applied_config = True
+                # 3) Q&A via agent when it's a question
+                if not post_action and not applied_config:
+                    is_question = _is_question_via_llm(instr, llm)
+                    if is_question:
+                        # Update status label dynamically
+                        try:
+                            setter = getattr(st, "_dm_set_message", None)
+                            if callable(setter):
+                                setter("Answering your question…")
+                        except Exception:
+                            pass
+                        try:
+                            inline_session.add_user(instr)
+                            ans = inline_agent.run_git_assistant(
+                                instr, ToolContext(cfg=cfg, repo=repo), history=inline_session.messages[:-1]
+                            )
+                            inline_session.add_assistant(ans)
+                            inline_session.save()
+                            answered = True
+                        except Exception as e:
+                            ans = f"error: {e}"
+                            answered = True
+            # Handle outcomes after the initial status closes
+            if post_action:
+                handled = _handle_action(post_action)
                 if handled is True:
                     continue
                 if handled is False:
                     return
-            # Natural-language config changes
-            if not action and _apply_config_from_text(instr, cfg, repo):
+            if applied_config:
+                llm, tools, _ = _build_llm_and_tools(cfg)
+                inline_agent = AgentOrchestrator(llm, tools, max_steps=4)
                 status_panel(cfg)
-                with console.status("Regenerating suggestion…", spinner="dots"):
+                with timed_status("Regenerating suggestion…", spinner="dots"):
                     try:
                         msg = generate_commit_message(repo, cfg, force_regen=True)
                     except Exception:
                         pass
-                # Show updated message only
                 print_message(msg.subject, msg.body)
                 continue
-            # Git Q&A: detect git-related questions and answer with OpenAI when available
-            is_question = _looks_like_question(instr)
-            if is_question:
-                with console.status("Answering your question…", spinner="dots"):
-                    try:
-                        inline_session.add_user(instr)
-                        ans = inline_agent.run_git_assistant(
-                            instr, ToolContext(cfg=cfg, repo=repo), history=inline_session.messages[:-1]
-                        )
-                        inline_session.add_assistant(ans)
-                        inline_session.save()
-                    except Exception as e:
-                        ans = f"error: {e}"
+            if answered:
                 console.print(Panel(_sanitize_agent_output(ans or ""), title="Agent", border_style="cyan", box=box.ROUNDED))
                 continue
             diff = get_staged_diff_text(repo, unified=3)
-            with console.status("Refining message…", spinner="dots"):
+            with timed_status("Refining message…", spinner="dots"):
                 refined = refine_with_openai(msg.subject, msg.body, diff, instr, cfg)
             if refined is None:
-                with console.status("Refining locally…", spinner="dots"):
-                    refined = heuristic_refine(
-                        msg.subject, msg.body, instr, max_len=cfg.max_subject_length, diff_text=diff
-                    )
+                # No AI provider available; keep the current message unchanged and show a tip
+                tip("AI provider not configured; skipping refinement. Run 'diffmind init' to enable OpenAI.")
+                refined = msg
             msg = refined
             try:
                 _cache_save_current(repo, msg, {"source": "refine"})
             except Exception:
                 pass
-            # Show updated message only
             print_message(msg.subject, msg.body)
             continue
 
@@ -1677,7 +1867,7 @@ def config_wizard():
 
 def _build_llm_and_tools(cfg: DiffMindConfig):
     provider = (cfg.provider or "simple").lower()
-    tools = [GitDiffTool(), GitCommitTool(), GitRepoTool(), CalculatorTool()]
+    tools = [GitDiffTool(), GitCommitTool(), GitRepoTool(), GitRunTool(), CalculatorTool()]
     if provider == "openai":
         import os as _os
 
