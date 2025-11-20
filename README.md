@@ -25,9 +25,9 @@ AIâ€‘assisted commit message generator with a delightful terminal UX and a oneâ€
 ## Demo
 
 <div align="center">
-  <video src="demo.mp4" width="900" autoplay muted loop playsinline preload="auto">
-    <a href="demo.mp4">Watch the demo video</a>
-  </video>
+  <img src="demo.gif" alt="DiffMind demo" width="900" />
+  <br/>
+  <sub><a href="demo.mp4">Watch in higher quality (MP4)</a></sub>
 </div>
 
 ## Install
