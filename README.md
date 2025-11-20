@@ -26,8 +26,6 @@ AIâ€‘assisted commit message generator with a delightful terminal UX and a oneâ€
 
 <div align="center">
   <img src="demo.gif" alt="DiffMind demo" width="900" />
-  <br/>
-  <sub><a href="demo.mp4">Watch in higher quality (MP4)</a></sub>
 </div>
 
 ## Install
