@@ -22,6 +22,14 @@ AIâ€‘assisted commit message generator with a delightful terminal UX and a oneâ€
 - Works offline by default; seamlessly upgrades to OpenAI when available
 - Simple config with sane defaults; interactive refine/edit session
 
+## Demo
+
+<div align="center">
+  <video src="demo.mp4" width="900" autoplay muted loop playsinline preload="auto">
+    <a href="demo.mp4">Watch the demo video</a>
+  </video>
+</div>
+
 ## Install
 
 Requires Python 3.8+.
